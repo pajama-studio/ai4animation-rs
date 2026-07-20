@@ -7,6 +7,7 @@ The first release focuses on the runtime pieces a game needs every frame:
 - an analytic, joint-limited two-bone solver for animal legs;
 - walk, trot, pace, and canter contact scheduling;
 - a small mode-adaptive expert network evaluator;
+- a versioned, allocation-free learned contact model and deterministic trainer;
 - deterministic, allocation-free gait sampling.
 
 ```rust
@@ -40,9 +41,25 @@ licenses permit the intended use.
 
 ## Status
 
-`0.1` is a runtime foundation, not a `PyTorch` training replacement. Planned
+`0.2` is a runtime and training experiment, not a `PyTorch` replacement. Planned
 follow-ups include a documented neutral weight format, ONNX/safetensors import,
 trajectory feature schemas, retargeting, and offline dataset tools.
+
+## Reproducible contact experiment
+
+The first training experiment learns a stance/contact proposal from synthetic,
+dimensionless pose signals. It proves the complete train/export/load/infer path
+without importing restricted motion data. Rebuild its checked-in weights with:
+
+```sh
+cargo run --release --bin train-quadruped-contact
+cargo test --all-targets
+```
+
+The `.a4a` artifact starts with the versioned `A4AQCM01` header followed by its
+fixed shape and little-endian `f32` parameters. The model is advisory by design:
+production integrations must preserve hard reach, bone-length, debounce, and
+fallback constraints around its probability output.
 
 ## License
 
