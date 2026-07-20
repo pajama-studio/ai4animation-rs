@@ -1,0 +1,49 @@
+# ai4animation-rs
+
+Clean-room Rust building blocks for responsive, data-driven character animation.
+The first release focuses on the runtime pieces a game needs every frame:
+
+- fixed-length FABRIK with optional pole constraints;
+- an analytic, joint-limited two-bone solver for animal legs;
+- walk, trot, pace, and canter contact scheduling;
+- a small mode-adaptive expert network evaluator;
+- deterministic, allocation-free gait sampling.
+
+```rust
+use ai4animation_rs::{TwoBoneConfig, solve_two_bone};
+
+let solved = solve_two_bone(
+    [0.0, 1.0, 0.0],
+    [0.2, 0.0, 0.5],
+    [0.0, 1.0, 1.0],
+    TwoBoneConfig::new(0.65, 0.62),
+).unwrap();
+assert!((solved.upper_length() - 0.65).abs() < 1e-4);
+```
+
+## Relationship to `AI4AnimationPy`
+
+This project interoperates with the concepts used by
+[AI4AnimationPy](https://github.com/facebookresearch/ai4animationpy) and the
+paper *Mode-Adaptive Neural Networks for Quadruped Motion Control*. It is not
+an official Meta project.
+
+`AI4AnimationPy` and its bundled model weights/assets are CC BY-NC 4.0. This
+repository contains no translated `AI4AnimationPy` source, pretrained weights,
+motion data, or character assets. Its implementation was written independently
+from public algorithm descriptions and standard animation mathematics, allowing
+this crate to remain MIT/Apache-2.0 and suitable for commercial games.
+
+The `ModeAdaptiveNetwork` evaluator accepts weights supplied by the application.
+Applications are responsible for ensuring that their model and training data
+licenses permit the intended use.
+
+## Status
+
+`0.1` is a runtime foundation, not a `PyTorch` training replacement. Planned
+follow-ups include a documented neutral weight format, ONNX/safetensors import,
+trajectory feature schemas, retargeting, and offline dataset tools.
+
+## License
+
+Licensed under either Apache-2.0 or MIT, at your option.
