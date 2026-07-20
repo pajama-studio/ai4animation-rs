@@ -9,7 +9,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ai4animation_rs::{
     ContactFeatures, QUADRUPED_CONTACT_HIDDEN_COUNT, QUADRUPED_CONTACT_INPUT_COUNT,
@@ -26,6 +26,7 @@ const LEARNING_RATE: f32 = 0.0025;
 struct Sample {
     input: [f32; QUADRUPED_CONTACT_INPUT_COUNT],
     label: f32,
+    group: usize,
 }
 
 #[derive(Clone)]
@@ -82,13 +83,31 @@ impl Adam {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let output = env::args_os().nth(1).map_or_else(
-        || PathBuf::from("models/quadruped-contact-synthetic-v0.a4a"),
-        PathBuf::from,
-    );
+    let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    let (dataset_path, output) = match arguments.as_slice() {
+        [] => (
+            None,
+            PathBuf::from("models/quadruped-contact-synthetic-v0.a4a"),
+        ),
+        [output] => (None, PathBuf::from(output)),
+        [flag, dataset, output] if flag == "--dataset" => {
+            (Some(PathBuf::from(dataset)), PathBuf::from(output))
+        }
+        _ => {
+            return Err(
+                "usage: train-quadruped-contact [OUTPUT] | --dataset INPUT.tsv OUTPUT".into(),
+            );
+        }
+    };
     let mut random = Random::new(0xA14A_2026_0720_0001);
-    let train = dataset(TRAIN_SAMPLES, &mut random);
-    let test = dataset(TEST_SAMPLES, &mut random);
+    let (train, test) = if let Some(path) = dataset_path {
+        load_dataset(&path)?
+    } else {
+        (
+            synthetic_dataset(TRAIN_SAMPLES, &mut random),
+            synthetic_dataset(TEST_SAMPLES, &mut random),
+        )
+    };
     let mut parameters = Parameters::random(&mut random);
     let mut adam = Adam::zero();
     for step in 0..STEPS {
@@ -115,6 +134,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if metrics.accuracy < 0.965 || metrics.precision < 0.95 || metrics.recall < 0.95 {
         return Err(format!("holdout quality gate failed: {metrics:?}").into());
     }
+    let group_metrics = evaluate_groups(&parameters.model(), &test);
+    if let Some((group, metrics)) = group_metrics.iter().find(|(_, metrics)| {
+        metrics.accuracy < 0.97 || metrics.precision < 0.95 || metrics.recall < 0.95
+    }) {
+        return Err(format!("holdout group {group} quality gate failed: {metrics:?}").into());
+    }
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -129,10 +154,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics.precision,
         metrics.recall
     );
+    report_groups(&group_metrics);
     Ok(())
 }
 
-fn dataset(count: usize, random: &mut Random) -> Vec<Sample> {
+fn synthetic_dataset(count: usize, random: &mut Random) -> Vec<Sample> {
     (0..count)
         .map(|_| {
             let features = ContactFeatures {
@@ -147,9 +173,57 @@ fn dataset(count: usize, random: &mut Random) -> Vec<Sample> {
             Sample {
                 input: features.normalized(),
                 label: teacher(features),
+                group: 0,
             }
         })
         .collect()
+}
+
+fn load_dataset(path: &Path) -> Result<(Vec<Sample>, Vec<Sample>), Box<dyn std::error::Error>> {
+    let contents = fs::read_to_string(path)?;
+    let mut train = Vec::new();
+    let mut test = Vec::new();
+    for (line_index, line) in contents.lines().enumerate() {
+        if line_index == 0 {
+            continue;
+        }
+        let columns = line.split('\t').collect::<Vec<_>>();
+        if columns.len() != 11 {
+            return Err(format!(
+                "{}:{} expected 11 tab-separated fields, got {}",
+                path.display(),
+                line_index + 1,
+                columns.len()
+            )
+            .into());
+        }
+        let parse = |column: usize| -> Result<f32, Box<dyn std::error::Error>> {
+            Ok(columns[column].parse::<f32>()?)
+        };
+        let features = ContactFeatures {
+            height_over_contact_band: parse(3)?,
+            vertical_motion: parse(4)?,
+            forward_motion: parse(5)?,
+            lateral_motion: parse(6)?,
+            was_locked: columns[7] == "1",
+            stance_age: parse(8)?,
+            swing_age: parse(9)?,
+        };
+        let sample = Sample {
+            input: features.normalized(),
+            label: if columns[10] == "1" { 0.99 } else { 0.01 },
+            group: columns[1].parse()?,
+        };
+        match columns[0] {
+            "train" => train.push(sample),
+            "test" => test.push(sample),
+            split => return Err(format!("unknown dataset split {split:?}").into()),
+        }
+    }
+    if train.is_empty() || test.is_empty() {
+        return Err("dataset must contain non-empty train and test splits".into());
+    }
+    Ok((train, test))
 }
 
 fn teacher(features: ContactFeatures) -> f32 {
@@ -311,6 +385,29 @@ fn evaluate(model: &QuadrupedContactModel, samples: &[Sample]) -> Metrics {
         accuracy: ratio(correct, samples.len()),
         precision: ratio(true_positive, true_positive + false_positive),
         recall: ratio(true_positive, true_positive + false_negative),
+    }
+}
+
+fn evaluate_groups(model: &QuadrupedContactModel, samples: &[Sample]) -> Vec<(usize, Metrics)> {
+    let maximum_group = samples.iter().map(|sample| sample.group).max().unwrap_or(0);
+    (0..=maximum_group)
+        .filter_map(|group| {
+            let group_samples = samples
+                .iter()
+                .copied()
+                .filter(|sample| sample.group == group)
+                .collect::<Vec<_>>();
+            (!group_samples.is_empty()).then(|| (group, evaluate(model, &group_samples)))
+        })
+        .collect()
+}
+
+fn report_groups(groups: &[(usize, Metrics)]) {
+    for (group, metrics) in groups {
+        println!(
+            "group={group} holdout accuracy={:.4} precision={:.4} recall={:.4}",
+            metrics.accuracy, metrics.precision, metrics.recall
+        );
     }
 }
 

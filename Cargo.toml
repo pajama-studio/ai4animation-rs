@@ -1,6 +1,6 @@
 [package]
 name = "ai4animation-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Clean-room Rust runtime primitives for responsive data-driven character animation"
