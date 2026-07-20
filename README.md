@@ -32,7 +32,7 @@ an official Meta project.
 repository contains no translated `AI4AnimationPy` source, pretrained weights,
 motion data, or character assets. Its implementation was written independently
 from public algorithm descriptions and standard animation mathematics, allowing
-this crate to remain MIT/Apache-2.0 and suitable for commercial games.
+this crate to remain MIT-licensed and suitable for commercial games.
 
 The `ModeAdaptiveNetwork` evaluator accepts weights supplied by the application.
 Applications are responsible for ensuring that their model and training data
@@ -46,4 +46,4 @@ trajectory feature schemas, retargeting, and offline dataset tools.
 
 ## License
 
-Licensed under either Apache-2.0 or MIT, at your option.
+Licensed under MIT.

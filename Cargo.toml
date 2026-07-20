@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Clean-room Rust runtime primitives for responsive data-driven character animation"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 repository = "https://github.com/pajama-studio/ai4animation-rs"
 readme = "README.md"
 keywords = ["animation", "ik", "quadruped", "locomotion", "gamedev"]
@@ -20,4 +20,3 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
-
