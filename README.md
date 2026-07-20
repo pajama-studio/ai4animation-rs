@@ -41,9 +41,11 @@ licenses permit the intended use.
 
 ## Status
 
-`0.3` is a runtime and training experiment, not a `PyTorch` replacement. Planned
-follow-ups include a documented neutral weight format, ONNX/safetensors import,
-trajectory feature schemas, retargeting, and offline dataset tools.
+`0.4` adds a streaming BVH parser, hierarchy-aware forward kinematics, a
+whole-clip dataset splitter, and real-world foot-stability features. It remains
+a focused runtime/training experiment rather than a `PyTorch` replacement.
+Planned follow-ups include ONNX/safetensors import, trajectory feature schemas,
+cross-rig retargeting, and full-pose prediction.
 
 ## Reproducible contact experiment
 
@@ -64,11 +66,35 @@ cargo run --release --bin train-quadruped-contact -- \
   --dataset /path/to/contact-samples.tsv /path/to/game-contact.a4a
 ```
 
+Multiple corpora can be trained together. Mini-batches sample dataset groups
+uniformly so a large external source cannot drown out a smaller game-specific
+species or rig:
+
+```sh
+cargo run --release --bin train-quadruped-contact -- \
+  --dataset /path/to/game.tsv \
+  --dataset /path/to/external-dog.tsv \
+  /path/to/combined.a4a
+```
+
+The offline BVH tool parses motion incrementally, evaluates the declared Euler
+channel order, downsamples to 30 Hz, estimates each paw's floor from low/stable
+world-space observations, and makes train/test splits by entire clip:
+
+```sh
+cargo run --release --bin prepare-quadruped-bvh -- \
+  /path/to/raw_bvh_data /path/to/external-dog.tsv
+```
+
+See [`datasets/README.md`](datasets/README.md) for the audited third-party
+source, license, checksum, and exact corpus statistics. Raw third-party motion
+and derived sample tables are deliberately not redistributed by this repository.
+
 The trainer rejects a model unless both the aggregate holdout and every dataset
 group clear accuracy, precision, and recall gates. A group can represent a
 species, motion family, body type, or any application-defined rollout boundary.
 
-The `.a4a` artifact starts with the versioned `A4AQCM01` header followed by its
+The `.a4a` artifact starts with the versioned `A4AQCM02` header followed by its
 fixed shape and little-endian `f32` parameters. The model is advisory by design:
 production integrations must preserve hard reach, bone-length, debounce, and
 fallback constraints around its probability output.

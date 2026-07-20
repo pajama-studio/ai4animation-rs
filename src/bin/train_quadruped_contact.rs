@@ -7,6 +7,7 @@
     reason = "the deterministic PRNG deliberately folds its low bits into a small dataset index"
 )]
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,36 +85,49 @@ impl Adam {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
-    let (dataset_path, output) = match arguments.as_slice() {
+    let (dataset_paths, output) = match arguments.as_slice() {
         [] => (
-            None,
+            Vec::new(),
             PathBuf::from("models/quadruped-contact-synthetic-v0.a4a"),
         ),
-        [output] => (None, PathBuf::from(output)),
-        [flag, dataset, output] if flag == "--dataset" => {
-            (Some(PathBuf::from(dataset)), PathBuf::from(output))
-        }
+        [output] => (Vec::new(), PathBuf::from(output)),
         _ => {
-            return Err(
-                "usage: train-quadruped-contact [OUTPUT] | --dataset INPUT.tsv OUTPUT".into(),
-            );
+            let mut inputs = Vec::new();
+            let mut cursor = 0;
+            while cursor + 1 < arguments.len() - 1 && arguments[cursor] == "--dataset" {
+                inputs.push(PathBuf::from(&arguments[cursor + 1]));
+                cursor += 2;
+            }
+            if inputs.is_empty() || cursor != arguments.len() - 1 {
+                return Err("usage: train-quadruped-contact [OUTPUT] | --dataset INPUT.tsv [--dataset INPUT.tsv ...] OUTPUT".into());
+            }
+            (inputs, PathBuf::from(&arguments[cursor]))
         }
     };
     let mut random = Random::new(0xA14A_2026_0720_0001);
-    let (train, test) = if let Some(path) = dataset_path {
-        load_dataset(&path)?
-    } else {
+    let (train, test) = if dataset_paths.is_empty() {
         (
             synthetic_dataset(TRAIN_SAMPLES, &mut random),
             synthetic_dataset(TEST_SAMPLES, &mut random),
         )
+    } else {
+        let mut train = Vec::new();
+        let mut test = Vec::new();
+        for path in dataset_paths {
+            let (mut input_train, mut input_test) = load_dataset(&path)?;
+            train.append(&mut input_train);
+            test.append(&mut input_test);
+        }
+        (train, test)
     };
+    let training_groups = sample_groups(&train);
     let mut parameters = Parameters::random(&mut random);
     let mut adam = Adam::zero();
     for step in 0..STEPS {
         let mut gradient = Adam::zero().mean;
         for _ in 0..BATCH {
-            let sample = train[random.index(train.len())];
+            let group = &training_groups[random.index(training_groups.len())];
+            let sample = train[group[random.index(group.len())]];
             accumulate_gradient(&parameters, sample, &mut gradient);
         }
         scale_parameters(&mut gradient, 1.0 / BATCH as f32);
@@ -158,25 +172,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn sample_groups(samples: &[Sample]) -> Vec<Vec<usize>> {
+    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+    for (index, sample) in samples.iter().enumerate() {
+        groups.entry(sample.group).or_default().push(index);
+    }
+    groups.into_values().collect()
+}
+
 fn synthetic_dataset(count: usize, random: &mut Random) -> Vec<Sample> {
-    (0..count)
-        .map(|_| {
-            let features = ContactFeatures {
-                height_over_contact_band: random.unit() * 2.0,
-                vertical_motion: random.signed(),
-                forward_motion: random.signed(),
-                lateral_motion: random.signed(),
-                was_locked: random.unit() >= 0.5,
-                stance_age: random.unit(),
-                swing_age: random.unit(),
-            };
-            Sample {
-                input: features.normalized(),
-                label: teacher(features),
-                group: 0,
+    let positive_target = count / 2;
+    let negative_target = count - positive_target;
+    let (mut positives, mut negatives) = (0, 0);
+    let mut samples = Vec::with_capacity(count);
+    while samples.len() < count {
+        let features = ContactFeatures {
+            height_over_contact_band: random.unit() * 2.0,
+            vertical_motion: random.signed(),
+            forward_motion: random.signed(),
+            lateral_motion: random.signed(),
+            world_horizontal_motion: random.unit() * 2.0,
+            world_vertical_motion: random.signed(),
+            was_locked: random.unit() >= 0.5,
+            stance_age: random.unit(),
+            swing_age: random.unit(),
+        };
+        let label = teacher(features);
+        let accepted = if label >= 0.5 {
+            if positives < positive_target {
+                positives += 1;
+                true
+            } else {
+                false
             }
-        })
-        .collect()
+        } else {
+            if negatives < negative_target {
+                negatives += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if accepted {
+            samples.push(Sample {
+                input: features.normalized(),
+                label,
+                group: 0,
+            });
+        }
+    }
+    samples
 }
 
 fn load_dataset(path: &Path) -> Result<(Vec<Sample>, Vec<Sample>), Box<dyn std::error::Error>> {
@@ -188,9 +233,9 @@ fn load_dataset(path: &Path) -> Result<(Vec<Sample>, Vec<Sample>), Box<dyn std::
             continue;
         }
         let columns = line.split('\t').collect::<Vec<_>>();
-        if columns.len() != 11 {
+        if columns.len() != 11 && columns.len() != 13 {
             return Err(format!(
-                "{}:{} expected 11 tab-separated fields, got {}",
+                "{}:{} expected legacy 11-field or current 13-field TSV, got {}",
                 path.display(),
                 line_index + 1,
                 columns.len()
@@ -200,18 +245,46 @@ fn load_dataset(path: &Path) -> Result<(Vec<Sample>, Vec<Sample>), Box<dyn std::
         let parse = |column: usize| -> Result<f32, Box<dyn std::error::Error>> {
             Ok(columns[column].parse::<f32>()?)
         };
-        let features = ContactFeatures {
-            height_over_contact_band: parse(3)?,
-            vertical_motion: parse(4)?,
-            forward_motion: parse(5)?,
-            lateral_motion: parse(6)?,
-            was_locked: columns[7] == "1",
-            stance_age: parse(8)?,
-            swing_age: parse(9)?,
+        let (features, label_column) = if columns.len() == 13 {
+            (
+                ContactFeatures {
+                    height_over_contact_band: parse(3)?,
+                    vertical_motion: parse(4)?,
+                    forward_motion: parse(5)?,
+                    lateral_motion: parse(6)?,
+                    world_horizontal_motion: parse(7)?,
+                    world_vertical_motion: parse(8)?,
+                    was_locked: columns[9] == "1",
+                    stance_age: parse(10)?,
+                    swing_age: parse(11)?,
+                },
+                12,
+            )
+        } else {
+            let forward_motion = parse(5)?;
+            let lateral_motion = parse(6)?;
+            (
+                ContactFeatures {
+                    height_over_contact_band: parse(3)?,
+                    vertical_motion: parse(4)?,
+                    forward_motion,
+                    lateral_motion,
+                    world_horizontal_motion: forward_motion.hypot(lateral_motion),
+                    world_vertical_motion: parse(4)?,
+                    was_locked: columns[7] == "1",
+                    stance_age: parse(8)?,
+                    swing_age: parse(9)?,
+                },
+                10,
+            )
         };
         let sample = Sample {
             input: features.normalized(),
-            label: if columns[10] == "1" { 0.99 } else { 0.01 },
+            label: if columns[label_column] == "1" {
+                0.99
+            } else {
+                0.01
+            },
             group: columns[1].parse()?,
         };
         match columns[0] {
@@ -231,11 +304,15 @@ fn teacher(features: ContactFeatures) -> f32 {
         let protected_debounce = features.stance_age < 0.12;
         protected_debounce
             || (features.height_over_contact_band < 1.25
+                && features.world_horizontal_motion < 0.48
+                && features.world_vertical_motion.abs() < 0.5
                 && features.vertical_motion < 0.45
                 && !(features.forward_motion > 0.18 && features.height_over_contact_band > 0.62))
     } else {
         features.swing_age >= 0.12
             && features.height_over_contact_band < 0.72
+            && features.world_horizontal_motion < 0.3
+            && features.world_vertical_motion.abs() < 0.35
             && features.vertical_motion < 0.35
             && features.forward_motion < 0.08
     };
@@ -361,9 +438,11 @@ fn evaluate(model: &QuadrupedContactModel, samples: &[Sample]) -> Metrics {
             vertical_motion: sample.input[1],
             forward_motion: sample.input[2],
             lateral_motion: sample.input[3],
-            was_locked: sample.input[4] > 0.0,
-            stance_age: (sample.input[5] + 1.0) * 0.5,
-            swing_age: (sample.input[6] + 1.0) * 0.5,
+            world_horizontal_motion: sample.input[4] + 1.0,
+            world_vertical_motion: sample.input[5],
+            was_locked: sample.input[6] > 0.0,
+            stance_age: (sample.input[7] + 1.0) * 0.5,
+            swing_age: (sample.input[8] + 1.0) * 0.5,
         };
         let probability = model
             .predict_probability(features)

@@ -1,6 +1,6 @@
 [package]
 name = "ai4animation-rs"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Clean-room Rust runtime primitives for responsive data-driven character animation"
@@ -17,6 +17,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "train-quadruped-contact"
 path = "src/bin/train_quadruped_contact.rs"
+
+[[bin]]
+name = "prepare-quadruped-bvh"
+path = "src/bin/prepare_quadruped_bvh.rs"
 
 [lints.rust]
 unsafe_code = "forbid"

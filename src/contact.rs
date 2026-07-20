@@ -1,8 +1,8 @@
 use std::fmt;
 
-pub const QUADRUPED_CONTACT_INPUT_COUNT: usize = 7;
+pub const QUADRUPED_CONTACT_INPUT_COUNT: usize = 9;
 pub const QUADRUPED_CONTACT_HIDDEN_COUNT: usize = 24;
-const MODEL_MAGIC: &[u8; 8] = b"A4AQCM01";
+const MODEL_MAGIC: &[u8; 8] = b"A4AQCM02";
 const HEADER_BYTES: usize = 14;
 const MODEL_FLOAT_COUNT: usize = QUADRUPED_CONTACT_HIDDEN_COUNT * QUADRUPED_CONTACT_INPUT_COUNT
     + QUADRUPED_CONTACT_HIDDEN_COUNT
@@ -20,6 +20,12 @@ pub struct ContactFeatures {
     pub vertical_motion: f32,
     pub forward_motion: f32,
     pub lateral_motion: f32,
+    /// World-space horizontal foot displacement per sample, normalized by the
+    /// contact band. A planted foot should approach zero even while the body moves.
+    pub world_horizontal_motion: f32,
+    /// World-space vertical foot displacement per sample, normalized by the
+    /// contact band. This captures terrain/body movement missing from clip space.
+    pub world_vertical_motion: f32,
     pub was_locked: bool,
     pub stance_age: f32,
     pub swing_age: f32,
@@ -33,6 +39,8 @@ impl ContactFeatures {
             self.vertical_motion.clamp(-1.0, 1.0),
             self.forward_motion.clamp(-1.0, 1.0),
             self.lateral_motion.clamp(-1.0, 1.0),
+            self.world_horizontal_motion.clamp(0.0, 2.0) - 1.0,
+            self.world_vertical_motion.clamp(-1.0, 1.0),
             if self.was_locked { 1.0 } else { -1.0 },
             self.stance_age.clamp(0.0, 1.0).mul_add(2.0, -1.0),
             self.swing_age.clamp(0.0, 1.0).mul_add(2.0, -1.0),
@@ -246,6 +254,8 @@ mod tests {
             vertical_motion: -0.1,
             forward_motion: -0.2,
             lateral_motion: 0.0,
+            world_horizontal_motion: 0.05,
+            world_vertical_motion: -0.02,
             was_locked: false,
             stance_age: 0.0,
             swing_age: 0.8,
@@ -264,6 +274,8 @@ mod tests {
             vertical_motion: -0.1,
             forward_motion: -0.3,
             lateral_motion: 0.0,
+            world_horizontal_motion: 0.02,
+            world_vertical_motion: -0.01,
             was_locked: true,
             stance_age: 0.7,
             swing_age: 0.0,
@@ -273,6 +285,8 @@ mod tests {
             vertical_motion: 0.5,
             forward_motion: 0.5,
             lateral_motion: 0.1,
+            world_horizontal_motion: 0.9,
+            world_vertical_motion: 0.5,
             was_locked: false,
             stance_age: 0.0,
             swing_age: 0.3,

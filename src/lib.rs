@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod bvh;
 mod contact;
 mod gait;
 mod ik;
